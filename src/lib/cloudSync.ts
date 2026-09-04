@@ -9,6 +9,7 @@ export type { SyncSummary } from './sync/syncOperations';
 
 let syncChannel: RealtimeChannel | null = null;
 const pushDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
+let lastPushedGroupsJson = '';
 
 // Initialize Supabase Realtime Subscription
 export const initRealtimeSync = async () => {
@@ -29,6 +30,7 @@ export const initRealtimeSync = async () => {
           if (payload.old?.id === '__system_bookmark_groups__') {
             await db.settings.delete('bookmarkGroups');
             localStorage.removeItem('noesis_vault_bookmark_groups');
+            lastPushedGroupsJson = '[]';
             window.dispatchEvent(new CustomEvent('bookmark-groups-updated', { detail: [] }));
           } else {
             await db.nodes.delete(payload.old.id);
@@ -42,8 +44,15 @@ export const initRealtimeSync = async () => {
             try {
               const groups = cloudNode.metadata?.groups || (cloudNode.content ? JSON.parse(cloudNode.content) : []);
               if (Array.isArray(groups)) {
-                await db.settings.put({ key: 'bookmarkGroups', value: JSON.stringify(groups) });
-                localStorage.setItem('noesis_vault_bookmark_groups', JSON.stringify(groups));
+                const groupsJson = JSON.stringify(groups);
+                const currentLocal = localStorage.getItem('noesis_vault_bookmark_groups');
+                // Guard against echo-loop: if cloud data is identical to local state or just pushed, ignore
+                if (currentLocal === groupsJson || lastPushedGroupsJson === groupsJson) {
+                  return;
+                }
+                lastPushedGroupsJson = groupsJson;
+                await db.settings.put({ key: 'bookmarkGroups', value: groupsJson });
+                localStorage.setItem('noesis_vault_bookmark_groups', groupsJson);
                 window.dispatchEvent(new CustomEvent('bookmark-groups-updated', { detail: groups }));
               }
             } catch (e) {
@@ -150,15 +159,19 @@ export const pushNodeToCloud = async (node: FileNode): Promise<void> => {
       const userId = await getUserId();
       if (!userId) return; // Not logged in, skip sync
 
+      // Always fetch the freshest node from IndexedDB right before sending to Supabase
+      // to ensure both fast-typing content and bookmark metadata updates are preserved
+      const freshNode = (await db.nodes.get(nodeId)) || node;
+
       const payload = {
-        id: node.id,
-        name: node.name,
-        type: node.type,
-        parentId: node.parentId,
-        content: node.content || null,
-        metadata: node.metadata || null,
-        createdAt: node.createdAt,
-        updatedAt: node.updatedAt,
+        id: freshNode.id,
+        name: freshNode.name,
+        type: freshNode.type,
+        parentId: freshNode.parentId,
+        content: freshNode.content || null,
+        metadata: freshNode.metadata || null,
+        createdAt: freshNode.createdAt,
+        updatedAt: freshNode.updatedAt,
         user_id: userId,
       };
 
@@ -305,12 +318,19 @@ export const pushBookmarkGroupsToCloud = async (groups: any[]): Promise<void> =>
       const userId = await getUserId();
       if (!userId) return;
 
+      const groupsJson = JSON.stringify(groups || []);
+      // Skip if identical to what was already pushed or received
+      if (groupsJson === lastPushedGroupsJson) {
+        return;
+      }
+      lastPushedGroupsJson = groupsJson;
+
       const payload = {
         id: '__system_bookmark_groups__',
         name: 'Bookmark Groups',
         type: 'system',
         parentId: '__system__',
-        content: JSON.stringify(groups || []),
+        content: groupsJson,
         metadata: { groups: groups || [] },
         createdAt: 0,
         updatedAt: Date.now(),

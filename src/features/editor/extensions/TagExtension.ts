@@ -70,7 +70,7 @@ export const TagExtension = Extension.create<TagOptions>({
                       Decoration.inline(start, end, {
                         class: 'inline-tag select-text',
                         'data-tag': rawTagName,
-                        title: `Tag: #${rawTagName}`,
+                        title: `Tag: #${rawTagName} • Ctrl + Klik untuk buka di sidebar`,
                       })
                     );
                   }

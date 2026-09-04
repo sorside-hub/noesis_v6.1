@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { VaultData, FileNode } from '../../../types/vault';
 import { useVirtualKeyboard } from '../../../hooks/useVirtualKeyboard';
 import { useFolderTree } from './useFolderTree';
@@ -40,6 +40,17 @@ export function useLeftSidebarLogic({
 
   // Active tab: 'files' | 'tags' | 'bookmarks'
   const [activeTab, setActiveTab] = useState<SidebarTabMode>('files');
+
+  // Switch to tags tab if a tag navigation event is received
+  useEffect(() => {
+    const handleOpenTag = (e: any) => {
+      if (e.detail?.tag) {
+        setActiveTab('tags');
+      }
+    };
+    window.addEventListener('open-tag-in-sidebar', handleOpenTag);
+    return () => window.removeEventListener('open-tag-in-sidebar', handleOpenTag);
+  }, []);
 
   // 1. Folder Tree Hierarchy & Expand/Collapse
   const folderTree = useFolderTree({

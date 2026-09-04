@@ -132,6 +132,19 @@ export const NavigationProvider: React.FC<NavigationProviderProps> = ({
     return () => window.removeEventListener('popstate', handlePopState);
   }, [onSelectTabId]);
 
+  // Listen for open-tag-in-sidebar to open desktop/mobile left sidebar to tags
+  useEffect(() => {
+    const handleOpenTag = (e: any) => {
+      if (e.detail?.tag) {
+        setView('vault');
+        setIsDesktopSidebarOpen(true);
+        setIsMobileSidebarOpen(true);
+      }
+    };
+    window.addEventListener('open-tag-in-sidebar', handleOpenTag);
+    return () => window.removeEventListener('open-tag-in-sidebar', handleOpenTag);
+  }, []);
+
   // Hook for all navigation interactions and URL / history push actions
   const actions = useNavigationActions({
     view,

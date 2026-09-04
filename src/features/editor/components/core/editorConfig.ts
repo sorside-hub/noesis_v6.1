@@ -216,7 +216,17 @@ export const getEditorExtensions = (nodesRef: React.MutableRefObject<any>) => [
 export const getEditorProps = (
   onWikilinkClickRef: React.MutableRefObject<any>,
   onChordClickRef?: React.MutableRefObject<any>
-) => ({
+) => {
+  let tagTouchState: {
+    tag: string;
+    wasFocused: boolean;
+    startX: number;
+    startY: number;
+    startTime: number;
+    isScroll: boolean;
+  } | null = null;
+
+  return {
   attributes: {
     class: 'prose dark:prose-invert prose-zinc max-w-none focus:outline-none min-h-[300px] px-4 sm:px-6 py-4 text-text-primary',
   },
@@ -279,6 +289,25 @@ export const getEditorProps = (
           return true;
         }
       }
+
+      // Handle Tag Click on Desktop (Ctrl/Cmd + Click or locked/read-only mode)
+      const tagEl = target.closest('.inline-tag, [data-tag]');
+      if (tagEl) {
+        const tag = tagEl.getAttribute('data-tag');
+        if (tag && (event.ctrlKey || event.metaKey || !view.editable)) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+          }
+          view.dom.blur();
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('open-tag-in-sidebar', { detail: { tag } }));
+          }, 30);
+          return true;
+        }
+      }
+
       return false;
     },
     touchstart(view: any, event: any) {
@@ -326,15 +355,64 @@ export const getEditorProps = (
           return true;
         }
       }
+
+      // Record touch start state for inline tag
+      const tagEl = target.closest('.inline-tag, [data-tag]');
+      if (tagEl) {
+        const tag = tagEl.getAttribute('data-tag');
+        if (tag && event.touches && event.touches[0]) {
+          tagTouchState = {
+            tag,
+            wasFocused: view.hasFocus(),
+            startX: event.touches[0].clientX,
+            startY: event.touches[0].clientY,
+            startTime: Date.now(),
+            isScroll: false,
+          };
+        }
+      } else {
+        tagTouchState = null;
+      }
+
       return false;
     },
     touchmove(view: any, event: any) {
+      if (tagTouchState && event.touches && event.touches[0]) {
+        const dx = Math.abs(event.touches[0].clientX - tagTouchState.startX);
+        const dy = Math.abs(event.touches[0].clientY - tagTouchState.startY);
+        if (dx > 8 || dy > 8) {
+          tagTouchState.isScroll = true;
+        }
+      }
+
       const target = event.target as HTMLElement;
       const mediaEl = target.closest('.noesis-audio-pill, .audio-node-view, .noesis-document-pill, .document-node-view, [data-no-swipe]');
       if (mediaEl) {
         event.stopPropagation();
         return true;
       }
+      return false;
+    },
+    touchend(view: any, event: any) {
+      if (tagTouchState && !tagTouchState.isScroll && Date.now() - tagTouchState.startTime < 500) {
+        const { tag, wasFocused } = tagTouchState;
+        tagTouchState = null;
+        // In mobile: if locked mode OR cursor is off (not focused), tap opens tag in sidebar!
+        // If cursor was active, do nothing here so it falls through to standard edit/cursor positioning.
+        if (!view.editable || !wasFocused) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+          }
+          view.dom.blur();
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('open-tag-in-sidebar', { detail: { tag } }));
+          }, 30);
+          return true;
+        }
+      }
+      tagTouchState = null;
       return false;
     },
   },
@@ -394,6 +472,16 @@ export const getEditorProps = (
         return true;
       }
     }
+    const tagEl = target.closest('.inline-tag, [data-tag]');
+    if (tagEl) {
+      const tag = tagEl.getAttribute('data-tag');
+      if (tag && (event.ctrlKey || event.metaKey || !view.editable)) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent('open-tag-in-sidebar', { detail: { tag } }));
+        return true;
+      }
+    }
+
     const linkEl = target.closest('a[href]');
     if (linkEl && !wikilinkEl) {
       const href = linkEl.getAttribute('href');
@@ -423,4 +511,5 @@ export const getEditorProps = (
 
     return false;
   },
-});
+};
+};

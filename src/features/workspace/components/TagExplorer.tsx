@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Hash,
   ChevronRight,
@@ -37,6 +37,56 @@ export const TagExplorer: React.FC<TagExplorerProps> = ({
   const [viewMode, setViewMode] = useState<TagViewMode>('tree');
   const [sortMode, setSortMode] = useState<TagSortMode>('name');
   const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
+  const [highlightedTag, setHighlightedTag] = useState<string | null>(null);
+
+  // Listen for open-tag-in-sidebar event to auto-expand parent nodes, scroll, and highlight tag
+  useEffect(() => {
+    let highlightTimer: any = null;
+
+    const handleOpenTag = (e: any) => {
+      const rawTag = e.detail?.tag;
+      if (!rawTag || typeof rawTag !== 'string') return;
+      const targetTag = rawTag.trim().replace(/^#/, '');
+      if (!targetTag) return;
+
+      // 1. Expand all parent segments so the tag is fully visible in tree mode
+      const parts = targetTag.split('/').filter(Boolean);
+      let acc = '';
+      const toExpand: string[] = [];
+      for (const part of parts) {
+        acc = acc ? `${acc}/${part}` : part;
+        toExpand.push(acc);
+      }
+
+      setExpandedTags((prev) => {
+        const next = new Set(prev);
+        toExpand.forEach((tagKey) => next.add(tagKey));
+        return next;
+      });
+
+      // 2. Set highlighted tag
+      setHighlightedTag(targetTag);
+
+      if (highlightTimer) clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        setHighlightedTag(null);
+      }, 2500);
+
+      // 3. Scroll to the element after DOM updates
+      setTimeout(() => {
+        const el = document.querySelector(`[data-tag-item="${targetTag}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 120);
+    };
+
+    window.addEventListener('open-tag-in-sidebar', handleOpenTag);
+    return () => {
+      window.removeEventListener('open-tag-in-sidebar', handleOpenTag);
+      if (highlightTimer) clearTimeout(highlightTimer);
+    };
+  }, []);
 
   // Clean search query
   const query = searchQuery.toLowerCase().trim().replace(/^#/, '');
@@ -139,16 +189,20 @@ export const TagExplorer: React.FC<TagExplorerProps> = ({
     const expanded = isTagExpanded(node.fullTag);
     const sortedSubTags = filterAndSortTagTreeNodes(node.subTags);
     const hasActiveFile = node.directFiles.some((f) => f.id === activeFileId);
+    const isHighlighted = highlightedTag === node.fullTag;
 
     return (
       <div key={node.fullTag} className="space-y-0.5">
         {/* Tag Node Row */}
         <button
           type="button"
+          data-tag-item={node.fullTag}
           onClick={() => toggleTag(node.fullTag)}
           className={twMerge(
             'w-full flex items-center justify-between py-1.5 px-2 rounded-lg text-xs font-medium cursor-pointer transition-all duration-150 group text-left select-none',
-            hasActiveFile
+            isHighlighted
+              ? 'bg-accent-primary/20 text-accent-primary ring-1 ring-accent-primary font-semibold animate-pulse'
+              : hasActiveFile
               ? 'bg-accent-primary/10 text-accent-primary'
               : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
           )}
@@ -336,15 +390,19 @@ export const TagExplorer: React.FC<TagExplorerProps> = ({
             filteredFlatTags.map((item) => {
               const expanded = isTagExpanded(item.tag);
               const hasActiveFile = item.files.some((f) => f.id === activeFileId);
+              const isHighlighted = highlightedTag === item.tag;
 
               return (
                 <div key={item.tag} className="rounded-lg overflow-hidden transition-colors">
                   <button
                     type="button"
+                    data-tag-item={item.tag}
                     onClick={() => toggleTag(item.tag)}
                     className={twMerge(
                       'w-full flex items-center justify-between py-1.5 px-2 rounded-lg text-xs font-medium cursor-pointer transition-all duration-150 group text-left select-none',
-                      hasActiveFile
+                      isHighlighted
+                        ? 'bg-accent-primary/20 text-accent-primary ring-1 ring-accent-primary font-semibold animate-pulse'
+                        : hasActiveFile
                         ? 'bg-accent-primary/10 text-accent-primary'
                         : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
                     )}
