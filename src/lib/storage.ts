@@ -1,6 +1,7 @@
 import { VaultData, FileNode } from '../types/vault';
 import { db } from './db';
 import { pushNodeToCloud, deleteNodesFromCloud } from './cloudSync';
+import { markNodeAsDeleted, isNodeRecentlyDeleted } from './sync/syncHelpers';
 
 const STORAGE_KEY_VAULT = 'noesis_vault_v1';
 const LEGACY_KEY_TITLE = 'obsidian_clone_title';
@@ -108,6 +109,23 @@ export const loadVault = async (): Promise<VaultData> => {
       openTabs = [legacyActiveIdSetting.value];
     }
 
+    // Smart Ghost Tab Cleanup:
+    // Only retain tabs that are either temporary scratchpads ('empty_') or exist in nodesRecord
+    const validOpenTabs = openTabs.filter(
+      (tabId) => tabId.startsWith('empty_') || Boolean(nodesRecord[tabId])
+    );
+
+    if (validOpenTabs.length !== openTabs.length) {
+      openTabs = validOpenTabs;
+      saveOpenTabs(openTabs).catch(console.error);
+    }
+
+    // Validate activeTabId: if activeTabId points to a deleted node, switch to another open tab or null
+    if (activeTabId && !activeTabId.startsWith('empty_') && !nodesRecord[activeTabId]) {
+      activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1] : null;
+      saveActiveTabId(activeTabId).catch(console.error);
+    }
+
     return {
       nodes: nodesRecord,
       openTabs,
@@ -136,6 +154,11 @@ export const saveOpenTabs = async (tabs: string[]): Promise<void> => {
 };
 
 export const saveNode = async (node: FileNode): Promise<void> => {
+  // Zombie Resurrect Guard: Do not save if node was recently deleted
+  if (isNodeRecentlyDeleted(node.id)) {
+    console.warn(`[storage] Blocked saveNode for recently deleted node ${node.id}`);
+    return;
+  }
   try {
     await db.nodes.put(node);
     // Background cloud sync (fire-and-forget)
@@ -146,6 +169,10 @@ export const saveNode = async (node: FileNode): Promise<void> => {
 };
 
 export const deleteNodes = async (ids: string[]): Promise<void> => {
+  // Mark as recently deleted to block resurrection
+  for (const id of ids) {
+    markNodeAsDeleted(id);
+  }
   try {
     await db.nodes.bulkDelete(ids);
     // Background cloud sync (fire-and-forget)

@@ -2,13 +2,19 @@ import { supabase } from './supabase';
 import { db } from './db';
 import { FileNode } from '../types/vault';
 import { RealtimeChannel } from '@supabase/supabase-js';
-import { getUserId, toTimestamp } from './sync/syncHelpers';
+import {
+  getUserId,
+  toTimestamp,
+  pushDebounceTimers,
+  cancelPushDebounceTimer,
+  markNodeAsDeleted,
+  isNodeRecentlyDeleted,
+} from './sync/syncHelpers';
 
 export { syncPullFromCloud, syncPushAllToCloud } from './sync/syncOperations';
 export type { SyncSummary } from './sync/syncOperations';
 
 let syncChannel: RealtimeChannel | null = null;
-const pushDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
 let lastPushedGroupsJson = '';
 
 // Initialize Supabase Realtime Subscription
@@ -33,7 +39,39 @@ export const initRealtimeSync = async () => {
             lastPushedGroupsJson = '[]';
             window.dispatchEvent(new CustomEvent('bookmark-groups-updated', { detail: [] }));
           } else {
-            await db.nodes.delete(payload.old.id);
+            const deletedId = payload.old?.id;
+            if (deletedId) {
+              // 1. Mark as recently deleted and cancel any pending push timers (Resurrect Guard)
+              markNodeAsDeleted(deletedId);
+
+              // 2. Delete from local IndexedDB
+              await db.nodes.delete(deletedId);
+
+              // 3. Smart Ghost Tab Cleanup: prune deleted ID from openTabs and adjust activeTabId
+              try {
+                const openTabsSetting = await db.settings.get('openTabs');
+                let tabs: string[] = [];
+                if (openTabsSetting?.value) {
+                  try {
+                    tabs = JSON.parse(openTabsSetting.value);
+                  } catch (e) {
+                    tabs = [];
+                  }
+                }
+                const newTabs = tabs.filter((t) => t !== deletedId);
+                if (newTabs.length !== tabs.length) {
+                  await db.settings.put({ key: 'openTabs', value: JSON.stringify(newTabs) });
+                }
+
+                const activeSetting = await db.settings.get('activeTabId');
+                if (activeSetting?.value === deletedId) {
+                  const nextActive = newTabs.length > 0 ? newTabs[newTabs.length - 1] : null;
+                  await db.settings.put({ key: 'activeTabId', value: nextActive });
+                }
+              } catch (err) {
+                console.warn('Failed to prune openTabs on realtime delete:', err);
+              }
+            }
             window.dispatchEvent(new Event('vault-updated'));
           }
         } else if (payload.new) {
@@ -149,19 +187,35 @@ export const initRealtimeSync = async () => {
 // Push a single node (create or update) to Supabase (debounced to avoid network thrashing during fast typing)
 export const pushNodeToCloud = async (node: FileNode): Promise<void> => {
   const nodeId = node.id;
-  if (pushDebounceTimers.has(nodeId)) {
-    clearTimeout(pushDebounceTimers.get(nodeId)!);
+
+  // Immediate guard: If node was recently deleted, cancel push immediately
+  if (isNodeRecentlyDeleted(nodeId)) {
+    cancelPushDebounceTimer(nodeId);
+    return;
   }
+
+  cancelPushDebounceTimer(nodeId);
 
   const timer = setTimeout(async () => {
     pushDebounceTimers.delete(nodeId);
     try {
+      // Secondary check: verify not deleted while debounce was waiting
+      if (isNodeRecentlyDeleted(nodeId)) {
+        console.info(`[cloudSync] Skipped push: node ${nodeId} was recently deleted.`);
+        return;
+      }
+
       const userId = await getUserId();
       if (!userId) return; // Not logged in, skip sync
 
-      // Always fetch the freshest node from IndexedDB right before sending to Supabase
-      // to ensure both fast-typing content and bookmark metadata updates are preserved
-      const freshNode = (await db.nodes.get(nodeId)) || node;
+      // CRITICAL ZOMBIE RESURRECT GUARD:
+      // Verify the node still exists in local IndexedDB before pushing to Supabase.
+      // If the node was deleted locally or remotely, abort immediately.
+      const freshNode = await db.nodes.get(nodeId);
+      if (!freshNode) {
+        console.info(`[cloudSync] Skipped push: note ${nodeId} no longer exists in local database.`);
+        return;
+      }
 
       const payload = {
         id: freshNode.id,
@@ -190,6 +244,10 @@ export const pushNodeToCloud = async (node: FileNode): Promise<void> => {
 // Delete nodes and their associated AI metadata and embeddings from Supabase
 export const deleteNodesFromCloud = async (ids: string[]): Promise<void> => {
   if (!ids || ids.length === 0) return;
+  // Mark all IDs as recently deleted and cancel any pending push timers (Resurrect Guard)
+  for (const id of ids) {
+    markNodeAsDeleted(id);
+  }
   try {
     const userId = await getUserId();
     if (!userId) return; // Not logged in, skip sync

@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { VaultData } from '../../types/vault';
 import { saveActiveTabId, saveOpenTabs } from '../../lib/storage';
+import { isNodeRecentlyDeleted } from '../../lib/sync/syncHelpers';
 
 interface UseVaultTabsProps {
   setVault: React.Dispatch<React.SetStateAction<VaultData | null>>;
@@ -10,6 +11,24 @@ export const useVaultTabs = ({ setVault }: UseVaultTabsProps) => {
   const setActiveTabId = useCallback((id: string | null) => {
     setVault((prev) => {
       if (!prev) return prev;
+
+      // Safe check: If targeting a specific note that does not exist in vault or was deleted
+      if (id && !id.startsWith('empty_')) {
+        const nodeExists = Boolean(prev.nodes[id]) && !isNodeRecentlyDeleted(id);
+        if (!nodeExists) {
+          // Ghost note targeted! Prune it from openTabs immediately and switch to a valid tab
+          const prunedTabs = prev.openTabs.filter((tabId) => tabId !== id);
+          const nextActiveId = prunedTabs.length > 0 ? prunedTabs[prunedTabs.length - 1] : null;
+          saveOpenTabs(prunedTabs);
+          saveActiveTabId(nextActiveId);
+          return {
+            ...prev,
+            openTabs: prunedTabs,
+            activeTabId: nextActiveId,
+          };
+        }
+      }
+
       saveActiveTabId(id);
 
       let newOpenTabs = prev.openTabs;
@@ -41,6 +60,11 @@ export const useVaultTabs = ({ setVault }: UseVaultTabsProps) => {
     const tabId = id || `empty_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     setVault((prev) => {
       if (!prev) return prev;
+
+      // Safe check: if opening a specific note that doesn't exist or was deleted, ignore
+      if (id && !id.startsWith('empty_') && (!prev.nodes[id] || isNodeRecentlyDeleted(id))) {
+        return prev;
+      }
 
       // If the file is already open, just switch to it (don't open a duplicate unless it's empty)
       if (id && prev.openTabs.includes(id)) {

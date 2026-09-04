@@ -1,7 +1,7 @@
 import { supabase } from '../supabase';
 import { db } from '../db';
 import { FileNode } from '../../types/vault';
-import { getUserId, toIsoString, toTimestamp } from './syncHelpers';
+import { getUserId, toIsoString, toTimestamp, markNodeAsDeleted } from './syncHelpers';
 
 export interface SyncSummary {
   nodesCount: number;
@@ -64,9 +64,39 @@ export const syncPullFromCloud = async (): Promise<SyncSummary> => {
       }
 
       // Reconcile: delete local nodes that no longer exist in cloud
+      const deletedNodeIds: string[] = [];
       for (const localNode of localNodesInDb) {
         if (!cloudNodeIdSet.has(localNode.id)) {
+          markNodeAsDeleted(localNode.id);
           await db.nodes.delete(localNode.id);
+          deletedNodeIds.push(localNode.id);
+        }
+      }
+
+      // Smart Ghost Tab Cleanup: prune any reconciled deleted nodes from openTabs
+      if (deletedNodeIds.length > 0) {
+        try {
+          const openTabsSetting = await db.settings.get('openTabs');
+          let tabs: string[] = [];
+          if (openTabsSetting?.value) {
+            try {
+              tabs = JSON.parse(openTabsSetting.value);
+            } catch (e) {
+              tabs = [];
+            }
+          }
+          const newTabs = tabs.filter((t) => !deletedNodeIds.includes(t));
+          if (newTabs.length !== tabs.length) {
+            await db.settings.put({ key: 'openTabs', value: JSON.stringify(newTabs) });
+          }
+
+          const activeSetting = await db.settings.get('activeTabId');
+          if (activeSetting?.value && deletedNodeIds.includes(activeSetting.value)) {
+            const nextActive = newTabs.length > 0 ? newTabs[newTabs.length - 1] : null;
+            await db.settings.put({ key: 'activeTabId', value: nextActive });
+          }
+        } catch (err) {
+          console.warn('Failed to prune openTabs during reconcile:', err);
         }
       }
     }

@@ -116,6 +116,12 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
           {(vault.openTabs || []).map((tabId) => {
             const isTabEmpty = tabId.startsWith('empty_');
             const node = !isTabEmpty ? vault.nodes[tabId] : null;
+
+            // Defensive guard: if it's a note tab but the note does not exist in vault, skip rendering
+            if (!isTabEmpty && !node) {
+              return null;
+            }
+
             const tabTitle = isTabEmpty ? 'Tab Baru' : (node?.name || 'Untitled');
             const isActive = vault.activeTabId === tabId;
 
@@ -124,6 +130,10 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
                 key={tabId}
                 ref={isActive ? activeTabRef : null}
                 onClick={() => {
+                  if (!isTabEmpty && !vault.nodes[tabId]) {
+                    closeTab(tabId);
+                    return;
+                  }
                   navigateToNote(tabId);
                 }}
                 className={`group flex items-center gap-2 h-8 px-3 text-xs font-medium min-w-[110px] max-w-[170px] shrink-0 cursor-pointer transition-colors relative select-none ${
