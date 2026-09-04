@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <input type="checkbox" id="mycheck">
+  <script>
+    const check = document.getElementById('mycheck');
+    check.addEventListener('mousedown', e => e.preventDefault());
+    check.addEventListener('click', e => console.log('clicked', check.checked));
+    check.addEventListener('change', e => console.log('changed', check.checked));
+  </script>
+</body>
+</html>
